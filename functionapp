@@ -1,0 +1,50 @@
+
+// Function: FoundryToLogicApp (HTTP trigger, POST)
+using System.Net;
+using System.Net.Http.Headers;
+using System.Text;
+using Microsoft.Azure.Functions.Worker;
+using Microsoft.Azure.Functions.Worker.Http;
+using Microsoft.Extensions.Logging;
+
+public class FoundryRelay
+{
+    private readonly ILogger _log;
+    private static readonly HttpClient http = new HttpClient();
+
+    public FoundryRelay(ILoggerFactory loggerFactory) => _log = loggerFactory.CreateLogger<FoundryRelay>();
+
+    [Function("FoundryToLogicApp")]
+    public async Task<HttpResponseData> Run([HttpTrigger(AuthorizationLevel.Function, "post")] HttpRequestData req)
+    {
+        var body = await new StreamReader(req.Body).ReadToEndAsync();
+
+        // Optional: validate body (pipeline/action present)
+        if (string.IsNullOrWhiteSpace(body) || !body.Contains("\"action\""))
+        {
+            var bad = req.CreateResponse(HttpStatusCode.BadRequest);
+            await bad.WriteStringAsync("Invalid payload: 'action' is required.");
+            return bad;
+        }
+
+        // Read the Logic App trigger URL (with ?api-version&sp&sv&sig) from App Settings
+        var logicAppUrl = Environment.GetEnvironmentVariable("LOGICAPP_URL");
+        if (string.IsNullOrWhiteSpace(logicAppUrl))
+        {
+            var bad = req.CreateResponse(HttpStatusCode.InternalServerError);
+            await bad.WriteStringAsync("LOGICAPP_URL not configured.");
+            return bad;
+        }
+
+        var forward = new HttpRequestMessage(HttpMethod.Post, logicAppUrl)
+        {
+            Content = new StringContent(body, Encoding.UTF8, "application/json")
+        };
+
+        var resp = await http.SendAsync(forward);
+        var outResp = req.CreateResponse((HttpStatusCode)resp.StatusCode);
+        var respBody = await resp.Content.ReadAsStringAsync();
+        await outResp.WriteStringAsync(respBody);
+        return outResp;
+    }
+}
